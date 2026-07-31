@@ -42,7 +42,31 @@
     再設 `PYTHONUTF8=1` 與 `PYTHONIOENCODING=utf-8`。這個做法跨語系 Windows 都正確，優先採用。
 - `.ps1` 反而要 **UTF-8 with BOM**（否則 PowerShell 5.1 會用 CP950 讀，中文變亂碼）。兩者相反，別搞混。
   - `start.ps1` 內另外顯式設定 `[Console]::OutputEncoding` / `InputEncoding` / `$OutputEncoding` 為 UTF-8。
-- **PowerShell 5.1 的 stderr 陷阱（發布阻擋級）**：在 `$ErrorActionPreference = "Stop"` 下，
+### 啟動腳本地雷（真實事故，勿改回去）
+
+**1. 不要用 `Start-Job` 開瀏覽器——會被防毒軟體攔截，而且是無聲失敗。**
+
+發布首版的 `start.ps1` 用 `Start-Job` 開背景工作輪詢連接埠、就緒後 `Start-Process $url` 開瀏覽器。
+`Start-Job` 會另外啟動一個 PowerShell 子程序執行序列化的 script block，這正是防毒軟體的行為特徵。
+**實測**：裝有 **WithSecure Client Security Premium** 的機器上，該子程序被判定為
+`Trojan:AMSI/SuspiciousExecute.A` 直接攔下，uvicorn 正常啟動、日誌一切正常，**但瀏覽器完全沒開**；
+又因為當時 `catch { }` 是空的，使用者連一個錯誤訊息都看不到，只能自己猜。
+
+正確作法（現行版本）：
+- uvicorn 改用 `Start-Process -NoNewWindow -PassThru` 以**子程序**執行（啟動的是 `python.exe`，不是 PowerShell）。
+- 主程序自己用 `Invoke-WebRequest` 輪詢 `/api/health`（比只檢查連接埠有無被綁定更準），
+  就緒後在**完整互動 session** 裡直接 `Start-Process $url`。
+- 全程**不產生任何 PowerShell 子程序**，不用 `-EncodedCommand`、不用隱藏視窗、不用 `Invoke-Expression`。
+- 開啟失敗一律把網址明顯印出來，**絕不無聲失敗**。
+
+**2. 收尾要用 `taskkill /T` 收整棵程序樹，不能只 `Kill()` 最上層。**
+
+實測發現 `Start-Process` 拿到的 PID 與 uvicorn 自己印的 `Started server process [PID]` **可能不同**
+（測試中是 20576 vs 21444）。原因是某些虛擬環境（例如 `uv` 建立的）的 `.venv\Scripts\python.exe`
+只是轉發用的 trampoline，會再開一個真正的直譯器程序。只 `Kill()` 最上層會留下真正在監聽連接埠的孤兒程序。
+現行 `finally` 先 `taskkill /PID <id> /T /F`，再 fallback 到 `Kill()`，最後**實際檢查連接埠是否真的釋放**並回報。
+
+**3. PowerShell 5.1 的 stderr 陷阱（發布阻擋級）**：在 `$ErrorActionPreference = "Stop"` 下，
   對原生指令做 `2>$null` 重導向**攔不住例外**——PS 5.1 會先把 stderr 包成終止用的 `NativeCommandError`，
   之後才套用重導向。所以 `py "-3.11-64" -c "exit()" 2>$null` 只要沒包在 `try { } catch { }` 裡，
   在缺少該版本的機器上會直接讓整個腳本崩潰。`start.ps1` 的 `Get-PythonInfo` 已全數包在 try/catch 內。

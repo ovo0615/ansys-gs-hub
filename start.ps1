@@ -274,39 +274,98 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "      套件安裝完成（全部安裝在 backend\.venv，不影響系統 Python）。"
 
-# --- [5/5] 前景啟動服務 --------------------------------------------------------
+# --- [5/5] 啟動服務 ------------------------------------------------------------
 Write-Step "[5/5] 啟動服務：$APP_URL"
 Write-Host ""
-Write-Host "      服務就緒後會自動開啟瀏覽器。" -ForegroundColor DarkGray
 Write-Host "      所有計算都在本機執行，資料不會上傳。" -ForegroundColor DarkGray
 Write-Host "      要結束服務：在本視窗按 Ctrl+C，或直接關閉本視窗。" -ForegroundColor DarkGray
 Write-Host ""
 
-# 服務尚未就緒就開瀏覽器會看到錯誤頁，因此改由背景工作輪詢連接埠，確認可連線後才開啟。
-$browserJob = Start-Job -ScriptBlock {
-    param($targetUrl, $targetPort)
+# ---------------------------------------------------------------------------
+# 為什麼不用 Start-Job 開瀏覽器（實際事故，勿改回去）
+#
+# 舊版是用 Start-Job 開一個背景工作輪詢連接埠、就緒後呼叫 Start-Process 開瀏覽器。
+# Start-Job 會另外啟動一個 PowerShell 子程序並在其中執行序列化的 script block，
+# 這正是防毒軟體的行為偵測特徵。實測在裝有 WithSecure Client Security 的機器上，
+# 該子程序被判定為 Trojan:AMSI/SuspiciousExecute.A 直接攔截，瀏覽器完全沒開，
+# 而且因為當時 catch 區塊是空的，使用者連一個錯誤訊息都看不到。
+#
+# 現在改成：uvicorn 以「子程序」執行（啟動的是 python.exe，不是 PowerShell），
+# 主程序自己輪詢 /api/health、就緒後在完整互動 session 裡直接開瀏覽器。
+# 全程不產生任何 PowerShell 子程序，也不使用 -EncodedCommand 或隱藏視窗。
+# 開啟失敗時一律把網址明顯印出來，絕不再無聲失敗。
+# ---------------------------------------------------------------------------
+
+Push-Location $backend
+$server = $null
+try {
+    # -NoNewWindow：與本視窗共用主控台，uvicorn 日誌照樣顯示；
+    # 按 Ctrl+C 或關閉視窗時，主控台會一併通知子程序結束，不會殘留佔用連接埠。
+    $server = Start-Process -FilePath $py `
+        -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$BACKEND_PORT") `
+        -NoNewWindow -PassThru
+
+    # 等待服務真的能回應（不只是連接埠被綁定），最多約 60 秒
+    $ready = $false
     for ($i = 0; $i -lt 120; $i++) {
+        if ($server.HasExited) { break }
         Start-Sleep -Milliseconds 500
         try {
-            $client = New-Object System.Net.Sockets.TcpClient
-            $client.Connect("127.0.0.1", $targetPort)
-            $client.Close()
-            Start-Process $targetUrl
-            return
+            $health = Invoke-WebRequest -Uri "$APP_URL/api/health" -UseBasicParsing -TimeoutSec 2
+            if ($health.StatusCode -eq 200) { $ready = $true; break }
         } catch { }
     }
-} -ArgumentList $APP_URL, $BACKEND_PORT
 
-try {
-    # 前景執行：關閉本視窗或按 Ctrl+C 就會一併結束服務，不會留下背景程序佔用連接埠。
-    Push-Location $backend
-    & $py -m uvicorn app.main:app --host 127.0.0.1 --port $BACKEND_PORT
-} finally {
-    Pop-Location
-    if ($null -ne $browserJob) {
-        Stop-Job   -Job $browserJob -ErrorAction SilentlyContinue
-        Remove-Job -Job $browserJob -Force -ErrorAction SilentlyContinue
+    if ($ready) {
+        $opened = $false
+        try {
+            Start-Process $APP_URL
+            $opened = $true
+        } catch { }
+
+        Write-Host ""
+        if ($opened) {
+            Write-Ok "服務已就緒，已開啟瀏覽器：$APP_URL"
+        } else {
+            Write-Bad "服務已就緒，但無法自動開啟瀏覽器。"
+            Write-Bad "請自行在瀏覽器輸入下列網址："
+            Write-Host "    $APP_URL" -ForegroundColor Cyan
+        }
+    } elseif (-not $server.HasExited) {
+        Write-Host ""
+        Write-Bad "服務啟動逾時，仍未回應健康檢查。請自行在瀏覽器輸入下列網址確認："
+        Write-Host "    $APP_URL" -ForegroundColor Cyan
     }
     Write-Host ""
-    Write-Ok "服務已結束，連接埠 $BACKEND_PORT 已釋放。"
+
+    if (-not $server.HasExited) {
+        Wait-Process -Id $server.Id
+    }
+} finally {
+    Pop-Location
+
+    # 收尾備援：正常情況下按 Ctrl+C 或關閉視窗時，主控台已經通知子程序結束了，
+    # 這裡只是保險。用 taskkill /T 連同子孫程序一起收——某些虛擬環境（例如 uv 建立的）
+    # 的 python.exe 只是轉發用的 trampoline，會再開一個真正的直譯器程序，
+    # 只 Kill() 最上層會留下真正在監聽連接埠的孤兒程序。
+    if ($null -ne $server) {
+        try {
+            if (-not $server.HasExited) {
+                & taskkill /PID $server.Id /T /F | Out-Null
+                Start-Sleep -Milliseconds 500
+            }
+        } catch { }
+        try {
+            if (-not $server.HasExited) { $server.Kill() }
+        } catch { }
+    }
+
+    Write-Host ""
+    $leftover = Get-NetTCPConnection -LocalPort $BACKEND_PORT -State Listen -ErrorAction SilentlyContinue
+    if ($leftover) {
+        Write-Bad "服務已結束，但連接埠 $BACKEND_PORT 仍被佔用（PID $($leftover[0].OwningProcess)）。"
+        Write-Bad "下次啟動若顯示連接埠被佔用，請先結束該程序。"
+    } else {
+        Write-Ok "服務已結束，連接埠 $BACKEND_PORT 已釋放。"
+    }
 }
