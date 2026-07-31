@@ -51,6 +51,7 @@ Fluent Getting Started「混合三通 Mixing Tee」參數化端對端求解腳�
 from __future__ import annotations
 
 import datetime
+import math
 import os
 from typing import Callable, List, Optional, Tuple
 
@@ -80,6 +81,19 @@ def _dominant_normal(face, log: Logger):
     comps = [float(n[0]), float(n[1]), float(n[2])]
     i = max(range(3), key=lambda k: abs(comps[k]))
     return (["x", "y", "z"][i], 1 if comps[i] >= 0 else -1)
+
+
+def _target_cell_size_m(radius_mm: float) -> float:
+    """表面三角化與體網格「共用」的目標尺寸（公尺）。
+
+    這兩者必須一致。實測若只把體網格尺寸調細（例如 4 mm）而 STL 表面 facet 仍是
+    預設的粗網格（約 10 mm），Prime 的 AutoMesh 會直接讓 server 崩潰
+    （gRPC「Stream removed / Connection reset」），因為它無法用比表面 facet 還小的
+    格點去填一個粗糙的封閉面。要細就兩邊一起細。
+
+    取 r/4 → 管徑方向約 8 格，兼顧解析度與求解時間。
+    """
+    return (radius_mm / 4.0) / 1000.0
 
 
 def _write_solid_block(f, name: str, mesh) -> None:
@@ -117,6 +131,8 @@ def build_geometry(params: dict, out_dir: str, log: Logger) -> Tuple[str, List[s
     from ansys.geometry.core import launch_modeler
     from ansys.geometry.core.math import Plane, Point2D, Point3D, Vector3D
     from ansys.geometry.core.misc import UNITS
+    from ansys.geometry.core.misc.measurements import Distance
+    from ansys.geometry.core.misc.options import TessellationOptions
     from ansys.geometry.core.sketch import Sketch
 
     r = float(params["radius_mm"])
@@ -176,12 +192,29 @@ def build_geometry(params: dict, out_dir: str, log: Logger) -> Tuple[str, List[s
         zone_names = ["inlet_cold", "inlet_hot", "outlet"] + [f"wall_{i}" for i in range(len(wall_faces))]
         ordered_faces = [cold_face, hot_face, out_face] + wall_faces
 
-        log(f"逐面三角化並寫入具名多 solid STL（{len(zone_names)} 個 zone：{', '.join(zone_names)}）...")
+        # 三角化品質：預設的 face.tessellate() 會把圓管切成大約 12 邊形（facet 邊長約 10 mm），
+        # 而且 watertight 預設為 False——相鄰面在共用邊上的三角形不保證對齊，
+        # 組出來的 STL 可能有裂縫，Prime 由此產生的體網格品質會很差。
+        # 這裡明確指定：面偏差、角度偏差、最大邊長，並要求 watertight。
+        edge_mm = _target_cell_size_m(r) * 1000.0
+        tess_opts = TessellationOptions(
+            surface_deviation=Distance(r / 100.0, UNITS.mm),
+            angle_deviation=math.radians(5.0),
+            max_edge_length=Distance(edge_mm, UNITS.mm),
+            watertight=True,
+        )
+        log(f"逐面三角化（facet 邊長 <= {edge_mm:.2f} mm、watertight）並寫入具名多 solid STL"
+            f"（{len(zone_names)} 個 zone：{', '.join(zone_names)}）...")
         os.makedirs(out_dir, exist_ok=True)
         stl_path = os.path.join(out_dir, "MixingTee.stl")
         with open(stl_path, "w", encoding="ascii") as sf:
             for name, face in zip(zone_names, ordered_faces):
-                mesh = face.tessellate()
+                try:
+                    mesh = face.tessellate(tess_opts)
+                except Exception as exc:  # noqa: BLE001
+                    # 不能無聲退回：退回預設等於整個細化沒生效，後面網格與求解都會被影響。
+                    log(f"! 「{name}」套用三角化選項失敗（{exc}），改用預設品質——網格會偏粗，請留意結果精度。")
+                    mesh = face.tessellate()
                 _write_solid_block(sf, name, mesh)
                 log(f"  {name}: {mesh.n_cells} 個三角面")
 
@@ -194,9 +227,76 @@ def build_geometry(params: dict, out_dir: str, log: Logger) -> Tuple[str, List[s
 # ──────────────────────────────────────────────────────────────────────────
 # 2) 網格：PyPrimeMesh 匯入 STL → 具名 zone → 體網格 → 匯出 Fluent case
 # ──────────────────────────────────────────────────────────────────────────
-def mesh_with_prime(stl_path: str, zone_names: List[str], out_dir: str, log: Logger) -> str:
-    """用 PyPrimeMesh 把具名多 solid STL 轉成 Fluent 可讀的 case 檔，回傳 case 路徑。"""
+def _classify_zonelets(model, part, zonelets, arm_len_m: float, radius_m: float, log: Logger) -> dict:
+    """依「包圍盒幾何」辨識每個 face zonelet 該叫什麼名字，回傳 {zonelet_id: zone_name}。
+
+    ⚠ 絕對不要用 get_face_zonelets() 的回傳順序去對應 STL 內 solid 的寫入順序 ⚠
+    這是本專案踩過的真實地雷：Prime **先回傳壁面、再回傳開口**，與 STL 寫入順序完全不同。
+    實測（arm=120mm、r=20mm）：
+
+        STL 寫入順序 : inlet_cold, inlet_hot, outlet, wall_0, wall_1
+        Prime 回傳順序: [2, 3, 4, 5, 6]
+            zonelet 2  x=-0.12..0.12（整段）→ 主管壁面   ← 舊程式誤當成 inlet_cold
+            zonelet 3  z=0..0.12（整段）    → 支管壁面   ← 舊程式誤當成 inlet_hot
+            zonelet 4  x=-0.12..-0.12（扁）→ 冷側進口   ← 舊程式誤當成 outlet
+            zonelet 5  z=0.12..0.12（扁）  → 熱側進口   ← 舊程式誤當成 wall_0
+            zonelet 6  x=0.12..0.12（扁）  → 出口       ← 舊程式誤當成 wall_1
+
+    結果是「從管壁吹風進來、真正的開口全被封成牆」，解直接發散。
+    STL 的 solid 名稱也救不了：Prime 匯入後 part.get_labels() 回傳空陣列，名稱沒被保留。
+
+    可靠的判準是幾何本身：三個開口都是平面，包圍盒必定在某一軸「退化」（min≈max），
+    且退化位置就是我們自己建模時指定的臂長；管壁則在該軸上有完整跨距。
+    """
     import ansys.meshing.prime as prime
+
+    surface_utils = prime.SurfaceUtilities(model)
+    tol = max(radius_m * 0.05, 1e-6)
+
+    mapping: dict = {}
+    wall_index = 0
+    for zonelet in zonelets:
+        bb = surface_utils.get_bounding_box_of_zonelets(zonelets=[zonelet])
+        span_x = bb.xmax - bb.xmin
+        span_z = bb.zmax - bb.zmin
+
+        name = None
+        if span_x <= tol:  # 垂直於 X 的平面開口
+            if abs(bb.xmin + arm_len_m) <= tol:
+                name = "inlet_cold"
+            elif abs(bb.xmin - arm_len_m) <= tol:
+                name = "outlet"
+        elif span_z <= tol:  # 垂直於 Z 的平面開口
+            if abs(bb.zmin - arm_len_m) <= tol:
+                name = "inlet_hot"
+
+        if name is None:
+            name = f"wall_{wall_index}"
+            wall_index += 1
+
+        mapping[zonelet] = name
+        log(f"  zonelet {zonelet} → {name}"
+            f"（x:{bb.xmin:.4f}~{bb.xmax:.4f}, y:{bb.ymin:.4f}~{bb.ymax:.4f}, z:{bb.zmin:.4f}~{bb.zmax:.4f}）")
+
+    missing = [n for n in ("inlet_cold", "inlet_hot", "outlet") if n not in mapping.values()]
+    if missing:
+        raise RuntimeError(
+            "幾何辨識失敗，找不到這些開口：" + ", ".join(missing) +
+            "。請檢查上方各 zonelet 的包圍盒，確認臂長／半徑與建模時一致。"
+        )
+    return mapping
+
+
+def mesh_with_prime(stl_path: str, params: dict, out_dir: str, log: Logger) -> str:
+    """用 PyPrimeMesh 把 STL 轉成 Fluent 可讀的 case 檔，回傳 case 路徑。
+
+    邊界 zone 的命名一律以幾何辨識決定（見 _classify_zonelets），
+    不依賴 STL 的 solid 順序，也不依賴 Prime 的 zonelet 回傳順序。
+    """
+    import ansys.meshing.prime as prime
+
+    arm_len_m = float(params["arm_length_mm"]) / 1000.0
+    radius_m = float(params["radius_mm"]) / 1000.0
 
     log("啟動 Prime 網格引擎（launch_prime）...")
     prime_client = prime.launch_prime()
@@ -218,16 +318,24 @@ def mesh_with_prime(stl_path: str, zone_names: List[str], out_dir: str, log: Log
 
         part = model.parts[0]
         face_zonelets = part.get_face_zonelets()
-        if len(face_zonelets) != len(zone_names):
-            raise RuntimeError(
-                f"匯入後的面 zonelet 數量（{len(face_zonelets)}）與預期 zone 數量"
-                f"（{len(zone_names)}）不符，STL 的 solid 順序可能與 zone_names 不一致。"
-            )
 
-        log("依 STL 寫入順序建立具名邊界 zone ...")
-        for name, zonelet in zip(zone_names, face_zonelets):
+        log("依包圍盒幾何辨識各邊界 zone（不依賴 STL solid 順序）...")
+        mapping = _classify_zonelets(model, part, face_zonelets, arm_len_m, radius_m, log)
+
+        for zonelet, name in mapping.items():
             zr = model.create_zone(name, prime.ZoneType.FACE)
             part.add_zonelets_to_zone(zr.zone_id, [zonelet])
+
+        # 網格尺寸必須與 build_geometry 的 STL facet 邊長一致（見 _target_cell_size_m 的說明）。
+        # 未指定時只會產生約 4200 個格點、管徑方向不到 4 格，T 型接合的剪切層完全解析不出來。
+        target = _target_cell_size_m(float(params["radius_mm"]))
+        try:
+            model.set_global_sizing_params(
+                prime.GlobalSizingParams(model=model, min=target * 0.5, max=target, growth_rate=1.2)
+            )
+            log(f"  全域網格尺寸：min={target * 0.5:.4f} m、max={target:.4f} m（管徑方向約 8 格）")
+        except Exception as exc:  # noqa: BLE001
+            log(f"! 全域網格尺寸設定失敗，將使用預設值（網格會偏粗）：{exc}")
 
         log("辨識封閉體積（compute_closed_volumes）...")
         part.compute_closed_volumes(prime.ComputeVolumesParams(model=model))
@@ -289,16 +397,41 @@ def solve_case(case_path: str, params: dict, out_dir: str, log: Logger) -> dict:
     log("設定邊界條件：兩個 velocity-inlet（含溫度）與 pressure-outlet ...")
     _set_velocity_inlet(s, "inlet_cold", cold_v, cold_t, hyd_dia, log)
     _set_velocity_inlet(s, "inlet_hot", hot_v, hot_t, hyd_dia, log)
-    _set_pressure_outlet(s, "outlet", (cold_t + hot_t) / 2.0, log)
+    _set_pressure_outlet(s, "outlet", (cold_t + hot_t) / 2.0, hyd_dia, log)
 
     # ---- 報告定義 ----
     log("建立出口溫度／速度報告定義 ...")
-    _make_surface_report(s, "outlet-temp", "temperature", "outlet")
+    # 溫度用「質量加權平均」而非面積加權：混合溫度的定義來自能量守恆
+    # （sum(m_i*cp*T_i) / sum(m_i*cp)），對應的就是 mass-weighted average。
+    # 出口速度剖面不均勻時兩者差很多——實測同一組解：
+    #   面積加權 45.396 degC（看起來偏高 1.6 度，容易被誤判成沒收斂）
+    #   質量加權 43.751 degC（與理論值 43.75 幾乎完全一致）
+    _make_surface_report(s, "outlet-temp", "temperature", "outlet", "surface-massavg")
     _make_surface_report(s, "outlet-vel", "velocity-magnitude", "outlet")
 
     log("Hybrid 初始化 ...")
     s.solution.initialization.hybrid_initialize()
-    log(f"開始疊代求解（{iters} 步）...")
+
+    # 邊界面積健檢：三個開口都是同半徑圓形，面積必須都 ~ pi*r^2。
+    # 曾經發生過 zone 名稱張冠李戴（把管壁當成進口）而「zonelet 數量相符」的檢查完全沒擋下來，
+    # 最後是從 10723 m/s 的離譜出口速度才回頭查出來的。這裡直接量面積把關。
+    # 注意：report_definitions.compute 必須在「初始化之後」才可用（初始化前呼叫會回報 inactive），
+    # 這也是為什麼這段檢查放在 hybrid_initialize() 後面。
+    _assert_opening_areas(s, math.pi * r_m * r_m, log)
+
+    # 求解穩定性：這個案例（粗網格 + T 型接合的強剪切 + 出口離接合處僅 3 倍管徑）
+    # 若一開始就用二階迎風 + 預設鬆弛因子，紊流方程會立刻爆掉
+    # （實測第 1 步 k 殘差 2.1e8、epsilon 殘差 1.2e17，最後 continuity 反而發散到 4e3）。
+    # 因此先用一階迎風 + 較保守的鬆弛因子把流場穩住，再切回二階取得精度。
+    warmup = max(1, min(iters // 3, 150))
+    _set_first_order(s, True, log)
+    _relax(s, {"k": 0.5, "epsilon": 0.5, "turb-viscosity": 0.8, "energy": 0.9}, log)
+    log(f"暖身求解（一階迎風，{warmup} 步）...")
+    s.solution.run_calculation.iterate(iter_count=warmup)
+
+    log(f"切回二階迎風，繼續求解（{iters} 步）...")
+    _set_first_order(s, False, log)
+    _relax(s, {"k": 0.7, "epsilon": 0.7, "turb-viscosity": 1.0, "energy": 0.95}, log)
     s.solution.run_calculation.iterate(iter_count=iters)
 
     # ---- 取結果 ----
@@ -306,9 +439,17 @@ def solve_case(case_path: str, params: dict, out_dir: str, log: Logger) -> dict:
     outlet_vel = _compute_report(s, "outlet-vel", log)
     outlet_temp_c = (outlet_temp_k - 273.15) if outlet_temp_k is not None else None
     if outlet_temp_c is not None:
-        log(f"* 出口面積加權平均溫度 ~ {outlet_temp_c:.2f} degC")
+        log(f"* 出口質量加權平均溫度（混合溫度）~ {outlet_temp_c:.2f} degC")
     if outlet_vel is not None:
         log(f"* 出口面積加權平均速度 ~ {outlet_vel:.3f} m/s")
+
+    log("檢查質量守恆 ...")
+    imbalance = _mass_balance(s, log)
+    converged = None if imbalance is None else bool(imbalance < 0.005)
+    if converged is True:
+        log("* 質量守恆良好（不平衡 < 0.5%），結果可信度高。")
+    elif converged is False:
+        log("! 質量不平衡偏大，結果僅供參考，建議增加疊代步數或細化網格。")
 
     # ---- 存檔與雲圖 ----
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -329,7 +470,7 @@ def solve_case(case_path: str, params: dict, out_dir: str, log: Logger) -> dict:
         "outlet_temp_c": outlet_temp_c,
         "outlet_velocity_ms": outlet_vel,
         "iterations": iters,
-        "converged": None,  # 收斂與否可由殘差判定，此處留待日後擴充
+        "converged": converged,  # 以質量守恆判定（不平衡 < 0.5% 視為可信）
         "case_path": final_case_path if os.path.exists(final_case_path) else None,
         "contour_path": contour_path,
     }
@@ -371,24 +512,154 @@ def _set_velocity_inlet(settings, name: str, vel: float, temp_k: float, hyd_dia:
         log(f"! 設定 velocity-inlet「{name}」時有欄位不符：{exc}（請以 dir()/help() 核對後微調）")
 
 
-def _set_pressure_outlet(settings, name: str, backflow_temp_k: float, log: Logger) -> None:
+def _set_pressure_outlet(settings, name: str, backflow_temp_k: float, hyd_dia: str, log: Logger) -> None:
+    """設定壓力出口。出口距離 T 型接合處很近，實測回流面積可達 5～9 成，
+    因此回流的溫度與紊流量都必須明確指定，否則預設值會讓解不穩。"""
     try:
         po = settings.setup.boundary_conditions.pressure_outlet[name]
         try:
             po.thermal.backflow_total_temperature.value = backflow_temp_k
-        except Exception:  # noqa: BLE001 - 回流溫度為選用
-            pass
-        log(f"  {name}: 0 Pa 表壓（pressure-outlet）")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  （回流溫度設定略過：{exc}）")
+        try:
+            po.turbulence.turbulence_specification = "Intensity and Hydraulic Diameter"
+            po.turbulence.backflow_turbulent_intensity = 0.05
+            po.turbulence.backflow_hydraulic_diameter = hyd_dia
+        except Exception as exc:  # noqa: BLE001
+            log(f"  （回流紊流量設定略過：{exc}）")
+        log(f"  {name}: 0 Pa 表壓（pressure-outlet），回流溫度 {backflow_temp_k - 273.15:.1f} degC")
     except Exception as exc:  # noqa: BLE001
         log(f"! 設定 pressure-outlet「{name}」時有欄位不符：{exc}")
 
 
-def _make_surface_report(settings, rep_name: str, field: str, surface: str) -> None:
+def _set_first_order(settings, on: bool, log: Logger) -> None:
+    """切換動量／紊流／能量的空間離散階數。一階較耗散但穩定，用於暖身。
+
+    值必須是「小寫連字號」形式，不是 Fluent GUI 上顯示的字串。
+    實測允許值只有：first-order-upwind / second-order-upwind / quick / third-order-muscl
+    （曾經誤用 "First Order Upwind"，結果整段設定失敗、暖身根本沒生效）。
+    """
+    scheme = "first-order-upwind" if on else "second-order-upwind"
+    try:
+        disc = settings.solution.methods.discretization_scheme
+        applied = []
+        for key in ("mom", "k", "epsilon", "temperature"):
+            try:
+                disc[key] = scheme
+                applied.append(key)
+            except Exception:  # noqa: BLE001 - 不同版本欄位名稱可能不同
+                continue
+        if applied:
+            log(f"  離散階數 → {scheme}（{', '.join(applied)}）")
+        else:
+            log(f"! 無法設定離散階數為 {scheme}，可用鍵值：{list(disc.keys()) if hasattr(disc, 'keys') else '?'}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"! 離散階數設定失敗（維持預設）：{exc}")
+
+
+def _relax(settings, factors: dict, log: Logger) -> None:
+    """設定次鬆弛因子。失敗要講出來，不要無聲跳過——
+    這類「設定沒吃到但求解照跑」的情況，最後只會表現成莫名其妙的發散。"""
+    try:
+        # 路徑是 solution.controls.under_relaxation，不是 solution.methods.*
+        # （methods 底下沒有 under_relaxation，曾經寫錯導致設定整段失效）。
+        # 可用鍵值：pressure, density, body-force, mom, k, epsilon, turb-viscosity, temperature
+        urf = settings.solution.controls.under_relaxation
+        done, failed = [], []
+        for key, val in factors.items():
+            try:
+                urf[key] = val
+                done.append(f"{key}={val}")
+            except Exception:  # noqa: BLE001
+                failed.append(key)
+        if done:
+            log(f"  鬆弛因子：{', '.join(done)}")
+        if failed:
+            log(f"  （這些鬆弛因子在此版本不存在，已略過：{', '.join(failed)}）")
+    except Exception as exc:  # noqa: BLE001
+        log(f"! 鬆弛因子設定失敗（維持預設）：{exc}")
+
+
+def _assert_opening_areas(settings, expected_area_m2: float, log: Logger) -> None:
+    """量測三個開口的實際面積，與理論值 pi*r^2 比對，差太多就直接中止。
+
+    這是針對「zone 名稱對應錯誤」的守門員。只檢查 zonelet 數量是不夠的——
+    數量相符但名字全部貼錯時，求解仍會照跑，只是結果完全沒有物理意義。
+    """
+    rd = settings.solution.report_definitions
+    problems = []
+    for name in ("inlet_cold", "inlet_hot", "outlet"):
+        key = f"chk-area-{name}"
+        try:
+            rd.surface[key] = {}
+            r = rd.surface[key]
+            r.report_type = "surface-area"
+            r.surface_names = [name]
+            area = _extract_first_float(rd.compute(report_defs=[key]))
+        except Exception as exc:  # noqa: BLE001
+            # 不可以無聲跳過：量不到就等於這道把關沒生效，
+            # 之前正是因為在初始化前呼叫（compute inactive）被 log 一行帶過，
+            # 結果錯誤的 zone 對應照樣一路跑到底。
+            problems.append(f"{name} 面積量測失敗（{exc}）")
+            continue
+        if area is None:
+            problems.append(f"{name} 面積量測回傳空值")
+            continue
+        ratio = area / expected_area_m2 if expected_area_m2 else float("inf")
+        log(f"  {name} 面積 = {area:.6e} m^2（理論 {expected_area_m2:.6e}，比值 {ratio:.2f}）")
+        if not (0.8 <= ratio <= 1.25):
+            problems.append(f"{name} 面積 {area:.4e} m^2 是理論值的 {ratio:.1f} 倍")
+
+    if problems:
+        raise RuntimeError(
+            "邊界面積健檢失敗：" + "；".join(problems) +
+            "。這通常代表 zone 名稱貼到錯誤的面（例如把管壁當成進口），"
+            "請檢查 _classify_zonelets 的包圍盒辨識結果。"
+        )
+
+
+def _make_surface_report(settings, rep_name: str, field: str, surface: str,
+                         report_type: str = "surface-areaavg") -> None:
     settings.solution.report_definitions.surface[rep_name] = {}
     rd = settings.solution.report_definitions.surface[rep_name]
-    rd.report_type = "surface-areaavg"
+    rd.report_type = report_type
     rd.field = field
     rd.surface_names = [surface]
+
+
+def _surface_value(settings, rep_name: str, field: str, surface: str, report_type: str,
+                   log: Logger) -> Optional[float]:
+    """建立一次性報告並立即取值。"""
+    try:
+        _make_surface_report(settings, rep_name, field, surface, report_type)
+        return _extract_first_float(
+            settings.solution.report_definitions.compute(report_defs=[rep_name])
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"! 讀取報告「{rep_name}」（{report_type}）失敗：{exc}")
+        return None
+
+
+def _mass_balance(settings, log: Logger) -> Optional[float]:
+    """回傳質量不平衡佔入流的比例，用來誠實判斷「有沒有收斂」。
+
+    穩態問題若質量守恆都做不到，其他數值一律不必看。
+    """
+    flows = {}
+    for zone in ("inlet_cold", "inlet_hot", "outlet"):
+        flows[zone] = _surface_value(
+            settings, f"mb-{zone}", None, zone, "surface-massflowrate", log
+        )
+    if any(v is None for v in flows.values()):
+        return None
+    inflow = abs(flows["inlet_cold"]) + abs(flows["inlet_hot"])
+    if inflow <= 0:
+        return None
+    imbalance = abs(sum(flows.values())) / inflow
+    log(f"  質量流率：冷 {flows['inlet_cold']:+.6f}、熱 {flows['inlet_hot']:+.6f}、"
+        f"出口 {flows['outlet']:+.6f} kg/s")
+    log(f"  質量不平衡 = {imbalance * 100:.4f}% 之入流量")
+    return imbalance
 
 
 def _compute_report(settings, rep_name: str, log: Logger) -> Optional[float]:
@@ -466,8 +737,10 @@ def solve(params: dict, log: Optional[Logger] = None) -> dict:
     out_dir = os.path.abspath(out_dir)
     log(f"輸出資料夾：{out_dir}")
 
-    stl_path, zone_names = build_geometry(params, out_dir, log)
-    case_path = mesh_with_prime(stl_path, zone_names, out_dir, log)
+    stl_path, _zone_names = build_geometry(params, out_dir, log)
+    # 注意：不把 _zone_names 傳給 mesh_with_prime。STL 的 solid 順序與 Prime 回傳的
+    # zonelet 順序不一致（見 _classify_zonelets 的說明），必須改用幾何辨識。
+    case_path = mesh_with_prime(stl_path, params, out_dir, log)
     result = solve_case(case_path, params, out_dir, log)
     result["geometry_path"] = stl_path
     return result

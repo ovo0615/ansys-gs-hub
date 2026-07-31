@@ -42,6 +42,93 @@
     再設 `PYTHONUTF8=1` 與 `PYTHONIOENCODING=utf-8`。這個做法跨語系 Windows 都正確，優先採用。
 - `.ps1` 反而要 **UTF-8 with BOM**（否則 PowerShell 5.1 會用 CP950 讀，中文變亂碼）。兩者相反，別搞混。
   - `start.ps1` 內另外顯式設定 `[Console]::OutputEncoding` / `InputEncoding` / `$OutputEncoding` 為 UTF-8。
+### Fluent／Prime 地雷（2026-07-31 重大修正，務必讀完再改）
+
+**先講結論：早期版本的 Fluent 結果完全不可信，HANDOFF 舊版寫的「已實測求解成功、出口 34.78 °C」是錯的。**
+那個數字是「從管壁吹風進來」算出來的產物。真正的原因與修法如下。
+
+**1. 絕對不要依賴 `part.get_face_zonelets()` 的回傳順序（主因）**
+
+舊程式假設 Prime 會依 STL 內 solid 的寫入順序回傳 zonelet，於是直接 `zip(zone_names, face_zonelets)`。
+**實測完全不是這樣**——Prime 是「先回傳壁面、再回傳開口」：
+
+| zonelet | 包圍盒 | 真實身分 | 舊程式命名 |
+| --- | --- | --- | --- |
+| 2 | x −0.12~0.12（整段） | 主管壁面 | `inlet_cold` ❌ |
+| 3 | z 0~0.12（整段） | 支管壁面 | `inlet_hot` ❌ |
+| 4 | x −0.12~−0.12（扁） | 冷側進口 | `outlet` ❌ |
+| 5 | z 0.12~0.12（扁） | 熱側進口 | `wall_0` ❌ |
+| 6 | x 0.12~0.12（扁） | 出口 | `wall_1` ❌ |
+
+而且 **Prime 匯入 STL 後不保留 solid 名稱**（`part.get_labels()` 回傳 `[]`），
+所以「靠名字對應」這條路也走不通。唯一可靠的是**幾何辨識**：三個開口都是平面，
+包圍盒必定在某一軸退化（min≈max），退化位置就是建模時的臂長。見 `_classify_zonelets()`。
+
+**當時的防呆為什麼沒擋下來**：它只檢查「zonelet 數量 == zone 名稱數量」（5==5）。
+數量相符但名字全貼錯時，求解照跑不誤。**檢查數量是不夠的，要檢查身分。**
+現在 `_assert_opening_areas()` 會實際量三個開口的面積並與 πr² 比對，偏離 ±20% 就中止。
+
+**2. `report_definitions.compute` 必須在初始化之後才能用**
+
+在 `hybrid_initialize()` 之前呼叫會回報
+`'...report_definitions.compute' is currently inactive`。
+第一版的面積健檢就是放太前面，被 `except` 記一行 log 就放行，等於整道把關沒生效——
+**這正是「無聲失敗」的典型**。現在放在初始化之後，而且量不到就當作失敗中止。
+
+**3. 表面 facet 尺寸與體網格尺寸必須一致，否則 Prime 會直接崩潰**
+
+只把 `set_global_sizing_params` 調細（2~4 mm）而 STL facet 仍是預設的粗網格（約 10 mm），
+`AutoMesh.mesh()` 會讓 Prime server 直接死掉：
+
+```text
+grpc._channel._MultiThreadedRendezvous: StatusCode.UNAVAILABLE
+"Stream removed (Connection reset ... 10054)"
+```
+
+要細就兩邊一起細，共用 `_target_cell_size_m()`。
+
+**4. `face.tessellate()` 一定要傳 `TessellationOptions`**
+
+預設值有兩個問題：圓管只會被切成約 12 邊形；而且 **`watertight` 預設是 `False`**，
+相鄰面在共用邊上的三角形不保證對齊，組出來的 STL 可能有裂縫。
+現在明確指定 `surface_deviation`、`angle_deviation`、`max_edge_length` 並 `watertight=True`。
+注意 docstring 的但書：**選項只在該面「第一次」被三角化時生效**，所以不要在之前先呼叫過無參數版本
+（`_is_planar` 與 `_dominant_normal` 用的是 `surface_type` 與 `normal()`，不會觸發三角化，安全）。
+
+**5. 混合溫度要用「質量加權」，不是面積加權**
+
+混合溫度的定義來自能量守恆（`sum(m_i·cp·T_i) / sum(m_i·cp)`），對應 `surface-massavg`。
+出口速度剖面不均勻時兩者差很多，同一組解實測：
+
+| 報告類型 | 出口溫度 | 對照理論 43.75 °C |
+| --- | --- | --- |
+| `surface-areaavg`（舊） | 45.396 °C | 高 1.6 度，容易被誤判成沒收斂 |
+| `surface-massavg`（現行） | **43.751 °C** | 幾乎完全一致 |
+
+**6. PyFluent 這兩個 API 的正確寫法（都踩過）**
+
+- 離散階數的值是**小寫連字號**，不是 GUI 顯示字串：
+  允許值只有 `first-order-upwind` / `second-order-upwind` / `quick` / `third-order-muscl`。
+  鍵值：`pressure, mom, k, epsilon, temperature`。
+- 次鬆弛因子在 **`solution.controls.under_relaxation`**，不在 `solution.methods` 底下
+  （`methods` 沒有 `under_relaxation` 屬性）。鍵值：
+  `pressure, density, body-force, mom, k, epsilon, turb-viscosity, temperature`（**沒有 `energy`**）。
+
+這兩個當初都寫錯，導致「一階暖身 + 鬆弛因子」整段實際上沒生效。
+幸好失敗訊息是**大聲印出來**的（連同可用鍵值一起印），才發現得了——
+**不要把這類設定包在無聲的 `except` 裡**。
+
+**修正後的實測結果**（冷 3 m/s 25 °C、熱 5 m/s 55 °C、r=20 mm、400 步、13779 格）：
+
+| 項目 | 理論 | 實測 | 誤差 |
+| --- | --- | --- | --- |
+| 出口混合溫度 | 43.75 °C | 43.751 °C | 0.003 % |
+| 出口平均流速 | 8.00 m/s | 8.017 m/s | 0.2 % |
+| 質量不平衡 | 0 | 0.0001 % | — |
+
+`reversed flow` / `temperature limited` / `turbulent viscosity limited` 皆 0 次
+（修正前分別 300／165／300 次）。`converged` 欄位現在依質量守恆判定，不再永遠回 `None`。
+
 ### Python 版本地雷：不要用 `str()` 比對列舉（真實事故）
 
 開發期的 `backend\.venv` 是 **Python 3.10**，但發布版 `start.ps1` 的探測順序是「3.12 → 3.11 → 3.10」，
@@ -163,7 +250,7 @@ ansys-gs-hub/
 |---|---|---|---|---|
 | **HFSS 偶極天線** | ✅ | S11 曲線＋遠場輻射方向圖 | ✅ PyAEDT | ✅ **是** |
 | **Mechanical 懸臂樑** | ✅ | 真求解結果＋理論估算 | ✅ PyMechanical | ✅ **是（見下）** |
-| **Fluent 混合三通** | ✅ | 真求解結果＋理論估算 | ✅ PyAnsys Geometry + PyPrimeMesh + PyFluent | ✅ **是（見下，收斂精度待優化）** |
+| **Fluent 混合三通** | ✅ | 真求解結果＋理論估算 | ✅ PyAnsys Geometry + PyPrimeMesh + PyFluent | ✅ **是（2026-07-31 修正 zone 對應後，與理論值差 < 0.3%）** |
 
 **三個領域現在全部端到端跑通。** 這是本專案「AI agent + skill 能完成簡單模擬」的核心驗證目標，已經達成。
 
@@ -186,7 +273,9 @@ ansys-gs-hub/
 ### Fluent 混合三通 Mixing Tee（完整可用，已實跑成功）
 - **原廠課程 Demo 模型**：兩股空氣（冷 3 m/s 25°C、熱 5 m/s 55°C，管半徑 20 mm）在 T 形管混合，看出口溫度。
 - 理論估算（前端）：質量守恆 ṁ=ρVA + 能量守恆混合溫度（≈43°C）、出口流速、雷諾數/流態。
-- **已驗證**：`python backend/scripts/fluent_mixing_tee.py --cold-vel 3 --cold-temp 25 --hot-vel 5 --hot-temp 55 --iters 150` 端到端成功跑完，輸出出口溫度 **34.78°C**（隨疊代數增加持續往理論值 43°C 收斂中，見下方「已知限制」）、產出 `.cas.h5` 與溫度雲圖 PNG。前端 `TeePanel.tsx` 已接上真求解 WebSocket。
+- **已驗證（2026-07-31 修正後）**：`python backend/scripts/fluent_mixing_tee.py --cold-vel 3 --cold-temp 25 --hot-vel 5 --hot-temp 55 --iters 400` 端到端成功跑完，出口混合溫度 **43.751 °C**（理論 43.75）、出口平均流速 **8.017 m/s**（理論 8.00）、質量不平衡 0.0001%，並產出 `.cas.h5` 與溫度雲圖 PNG。前端 `TeePanel.tsx` 已接上真求解 WebSocket。
+  > ⚠️ 舊版此處記載的「出口溫度 34.78 °C」**不是有效結果**，當時邊界 zone 名稱貼錯（把管壁當成進口）。
+  > 完整原因與修法見上方「Fluent／Prime 地雷」一節。
 
 #### 為什麼原本的做法完全走不通、最終怎麼解決的（重要，別走回頭路）
 
@@ -204,8 +293,18 @@ ansys-gs-hub/
 4. **Prime 匯出的 zone 類型還要手動修正一次（`_fix_zone_types()`）。** Prime 的 `ZoneType.FACE` 只是「一般面 zone」，讀進 Fluent solver 後**全部預設是 `wall`**（`bc.velocity_inlet`/`bc.pressure_outlet` 一開始都是空的），必須用 `bc.set_zone_type(zone_list=["inlet_cold"], new_type="velocity-inlet")` 之類的呼叫逐一轉型。同理，Prime 產生的 cell zone **預設是 `solid`**（不是 `fluid`！），第一次疊代時會報 `"Flow boundary zone found adjacent to solid zone"` 直接中止，必須先用 `czc.set_zone_type(zone_list=[cell_zone_name], new_type="fluid")` 轉成流體才能求解。這兩步都已經寫進 `_fix_zone_types()`，用**動態偵測**（`czc.solid.keys()`）而非寫死 zone 名稱，避免以後改幾何時 zone 名稱不同就失效。
 
 #### 已知限制（誠實說明，供未來優化）
-- **收斂精度**：150 步疊代跑出出口溫度 34.78°C，理論值 43°C；50 步的更早測試只有 19.48°C——數值隨疊代數增加持續往理論值靠近，代表方向對、但預設的 `iterations=200`（甚至更多）搭配目前 AutoMesh 的預設網格密度（`GEOMETRIC` size field，未特別加密）可能還不夠讓它完全收斂。實測時也觀察到出口有明顯 reversed flow（求解過程中的正常現象，隨疊代收斂會減少）。若要更精確，可以：加大 `--iters`、或在 `AutoMeshParams` 加 `min_size`/`max_size` 明確控制網格密度、或加邊界層。
-- **出口速度數值目前不合理**（實測 10723 m/s，遠超物理合理範圍，理論值約 8 m/s）：這是收斂未完全 + 網格偏粗（僅 4223 cell）導致少數異常格點把「面積加權平均」拉高，是典型 CFD 調校問題，不是管線本身的錯誤（溫度場相對穩定、速度場對網格品質更敏感）。下一位接手者若要正式使用這個結果，應優先處理這個問題（加密網格、加疊代、或檢查是否有退化面）。
+> ~~**收斂精度**：150 步疊代跑出 34.78°C…~~
+> ~~**出口速度數值目前不合理**（10723 m/s）：收斂未完全 + 網格偏粗導致…是典型 CFD 調校問題，不是管線本身的錯誤~~
+>
+> **以上兩條是 2026-07-31 之前的錯誤診斷，保留於此以免有人重蹈覆轍。**
+> 真正的原因不是收斂或網格密度，而是**邊界 zone 名稱貼到錯誤的面**——求解器一直在從管壁吹風進來。
+> 詳見上方「Fluent／Prime 地雷」。修正後溫度與速度都落在理論值 0.3% 內。
+
+- **沒有邊界層**：目前約 13800 格、管徑方向約 8 格，`AutoMesh` 未加 prism layer。
+  教學示範與趨勢判讀足夠，但壁面剪應力、壓損等對近壁解析敏感的量不建議直接引用。
+  要更準可在 Prime 加 `PrismParams` 產生邊界層。
+- **出口段偏短**：出口距 T 型接合處僅約 3 倍管徑。目前設定下已無回流警告，
+  但若大幅提高流速或改變幾何比例，建議調大「管臂長度」避免回流影響出口讀值。
 - 前端「CFD 求解結果」目前仍會把這個速度值原樣顯示出來，沒有做合理性檢查/警示；可以考慮在 `TeePanel.tsx` 加一個簡單的範圍檢查（例如速度 > 100 m/s 時顯示「可能未收斂」提示）。
 
 ---
@@ -231,10 +330,10 @@ ansys-gs-hub/
 - `fs` 輸出資料夾端點實測正常（validate-dir 會建資料夾並回綠色狀態）。
 - **HFSS 端對端真求解已實跑成功。**
 - **Mechanical 端對端真求解已實跑成功兩次**（`backend/projects/cantilever_20260713_*`，`solve.out` 顯示 `RUN COMPLETED`，底層為 Ansys MAPDL 2026 R1）。`_dominant_normal`/`_is_planar` 的端面辨識與 PyMechanical settings 欄位在本機環境下都跑得通，不需要再調整。
-- **Fluent 端對端真求解已實跑成功**（`python backend/scripts/fluent_mixing_tee.py --cold-vel 3 --cold-temp 25 --hot-vel 5 --hot-temp 55 --iters 150`，輸出出口溫度 34.78°C、產出 `.cas.h5` 與溫度雲圖 PNG，見上方 Fluent 小節完整診斷）。三個領域的求解腳本、後端 subprocess+JSON 接線、前端 WebSocket 求解 UI 全部完成並通過 `npx tsc --noEmit` / `py_compile`。
+- **Fluent 端對端真求解已實跑成功**（`--iters 400`，出口混合溫度 43.751 °C／流速 8.017 m/s／質量不平衡 0.0001%，見上方 Fluent 小節完整診斷）。**注意：2026-07-31 之前記載的 34.78 °C 是 zone 對應錯誤下的無效結果。**三個領域的求解腳本、後端 subprocess+JSON 接線、前端 WebSocket 求解 UI 全部完成並通過 `npx tsc --noEmit` / `py_compile`。
 
 **未驗證 / 待優化**：
-- Fluent 求解的**收斂精度與出口速度數值合理性**尚待優化（見上方 Fluent 小節「已知限制」）——管線本身沒問題，是網格密度/疊代數的調校問題。
+- Fluent 目前**沒有邊界層網格**，出口段僅約 3 倍管徑（見上方 Fluent 小節「已知限制」）。核心守恆量已驗證正確。
 - 前端 `TeePanel.tsx` 的視覺排版（3D 預覽＋溫度雲圖並排）因自動化測試工具在這個環境下的量測異常，**未能用自動化截圖確認**，但採用的是跟已經人工確認過可正常運作的 `BracketPanel.tsx` 相同的 flexbox 並排寫法（刻意避開已知的 allotment 巢狀陷阱），程式碼邏輯上應該一致；建議下一位接手者實際在瀏覽器重新整理頁面看一次。
 
 ---
