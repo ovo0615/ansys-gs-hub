@@ -201,34 +201,6 @@ if (-not (Test-Path $py)) {
     Write-Ok "      已存在虛擬環境，沿用 backend\.venv。"
 }
 
-# --- [3/5] 建立虛擬環境 --------------------------------------------------------
-Write-Step "[3/5] 準備獨立虛擬環境 backend\.venv..."
-
-if (-not (Test-Path $py)) {
-    Write-Step "      建立中（第一次執行需要數十秒）..."
-    & $pythonInfo.Exe @($pythonInfo.Prefix) -m venv $venv
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $py)) {
-        Write-Bad "      建立虛擬環境失敗。"
-        Read-Host "按 Enter 結束"
-        exit 1
-    }
-    Write-Ok "      虛擬環境建立完成。"
-} else {
-    Write-Ok "      虛擬環境已存在。"
-}
-
-# --- [4/5] 安裝套件 ------------------------------------------------------------
-Write-Step "[4/5] 依 requirements.lock.txt 安裝後端套件（第一次執行需要網路，可能數分鐘）..."
-
-& $py -m pip install --upgrade pip --quiet --disable-pip-version-check
-& $py -m pip install --require-virtualenv -r $lockFile --disable-pip-version-check
-if ($LASTEXITCODE -ne 0) {
-    Write-Bad "      套件安裝失敗，請確認網路連線或公司 Proxy 設定後重試。"
-    Read-Host "按 Enter 結束"
-    exit 1
-}
-Write-Ok "      套件安裝完成（全部安裝在 backend\.venv，不影響系統 Python）。"
-
 # --- 連接埠檢查 ----------------------------------------------------------------
 function Get-PortOwner {
     param([Parameter(Mandatory = $true)][int]$Port)
@@ -258,11 +230,49 @@ if ($null -ne $owner) {
     exit 1
 }
 
+# -CheckOnly 供封裝測試使用：在「不建立虛擬環境、不下載套件、不啟動服務、不佔用連接埠」的
+# 前提下，驗證發布內容完整、Python 可用、連接埠可用。刻意放在安裝步驟之前，讓封裝測試能快速完成。
 if ($CheckOnly) {
     Write-Host ""
-    Write-Ok "[5/5] -CheckOnly：環境檢查全部通過，未啟動服務、未佔用連接埠。"
+    Write-Ok "-CheckOnly：環境檢查全部通過。"
+    Write-Ok "  * 發布內容完整（frontend\dist 與 requirements.lock.txt 皆存在）"
+    if ($null -ne $pythonInfo) {
+        Write-Ok "  * 相容 Python：$($pythonInfo.Version)（$($pythonInfo.Bits) 位元）"
+    } else {
+        Write-Ok "  * 已存在 backend\.venv，沿用既有虛擬環境"
+    }
+    Write-Ok "  * 連接埠 $BACKEND_PORT 目前未被佔用"
+    Write-Ok "  未建立虛擬環境、未安裝套件、未啟動服務、未佔用任何連接埠。"
     exit 0
 }
+
+# --- [3/5] 建立虛擬環境 --------------------------------------------------------
+Write-Step "[3/5] 準備獨立虛擬環境 backend\.venv..."
+
+if (-not (Test-Path $py)) {
+    Write-Step "      建立中（第一次執行需要數十秒）..."
+    & $pythonInfo.Exe @($pythonInfo.Prefix) -m venv $venv
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $py)) {
+        Write-Bad "      建立虛擬環境失敗。"
+        Read-Host "按 Enter 結束"
+        exit 1
+    }
+    Write-Ok "      虛擬環境建立完成。"
+} else {
+    Write-Ok "      虛擬環境已存在。"
+}
+
+# --- [4/5] 安裝套件 ------------------------------------------------------------
+Write-Step "[4/5] 依 requirements.lock.txt 安裝後端套件（第一次執行需要網路，可能數分鐘）..."
+
+& $py -m pip install --upgrade pip --quiet --disable-pip-version-check
+& $py -m pip install --require-virtualenv -r $lockFile --disable-pip-version-check
+if ($LASTEXITCODE -ne 0) {
+    Write-Bad "      套件安裝失敗，請確認網路連線或公司 Proxy 設定後重試。"
+    Read-Host "按 Enter 結束"
+    exit 1
+}
+Write-Ok "      套件安裝完成（全部安裝在 backend\.venv，不影響系統 Python）。"
 
 # --- [5/5] 前景啟動服務 --------------------------------------------------------
 Write-Step "[5/5] 啟動服務：$APP_URL"
