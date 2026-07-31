@@ -206,8 +206,15 @@ def mesh_with_prime(stl_path: str, zone_names: List[str], out_dir: str, log: Log
 
         log(f"匯入 STL：{stl_path} ...")
         r = file_io.import_cad(file_name=stl_path, params=prime.ImportCadParams(model=model))
-        if str(r.error_code) != "ErrorCode.NOERROR":
-            raise RuntimeError(f"Prime import_cad 失敗：{r.error_code}")
+        # 一定要拿列舉本身比對，不要用 str(r.error_code) 去比字串。
+        # Python 3.11 起 IntEnum.__str__ 改成與 int.__str__ 一致：
+        #   Python 3.10 → str(ErrorCode.NOERROR) == "ErrorCode.NOERROR"
+        #   Python 3.11+ → str(ErrorCode.NOERROR) == "0"
+        # 舊版寫成字串比對，因此在 3.11/3.12 上即使匯入成功（error_code 為 NOERROR）
+        # 也會被誤判成失敗，錯誤訊息還會出現莫名其妙的「失敗：0」。
+        if r.error_code != prime.ErrorCode.NOERROR:
+            code_name = getattr(r.error_code, "name", r.error_code)
+            raise RuntimeError(f"Prime import_cad 失敗：{code_name}")
 
         part = model.parts[0]
         face_zonelets = part.get_face_zonelets()

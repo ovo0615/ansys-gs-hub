@@ -42,6 +42,43 @@
     再設 `PYTHONUTF8=1` 與 `PYTHONIOENCODING=utf-8`。這個做法跨語系 Windows 都正確，優先採用。
 - `.ps1` 反而要 **UTF-8 with BOM**（否則 PowerShell 5.1 會用 CP950 讀，中文變亂碼）。兩者相反，別搞混。
   - `start.ps1` 內另外顯式設定 `[Console]::OutputEncoding` / `InputEncoding` / `$OutputEncoding` 為 UTF-8。
+### Python 版本地雷：不要用 `str()` 比對列舉（真實事故）
+
+開發期的 `backend\.venv` 是 **Python 3.10**，但發布版 `start.ps1` 的探測順序是「3.12 → 3.11 → 3.10」，
+所以**使用者機器上建出來的是 3.12 的 venv**。使用者第一次跑 Fluent 求解就掛在：
+
+```text
+RuntimeError: Prime import_cad 失敗：0
+```
+
+「失敗：0」本身就很矛盾——Prime 的 `ErrorCode.NOERROR` 就是 0，代表其實**匯入成功了**。
+
+根因是這行用字串比對列舉：
+
+```python
+if str(r.error_code) != "ErrorCode.NOERROR":   # ← 錯
+```
+
+**Python 3.11 起 `IntEnum.__str__` 改成與 `int.__str__` 一致**：
+
+| Python | `str(prime.ErrorCode.NOERROR)` | 結果 |
+| --- | --- | --- |
+| 3.10 | `"ErrorCode.NOERROR"` | 判斷通過 |
+| 3.11／3.12 | `"0"` | **誤判為失敗** |
+
+正確寫法是拿列舉本身比對（所有版本都對）：
+
+```python
+if r.error_code != prime.ErrorCode.NOERROR:
+    code_name = getattr(r.error_code, "name", r.error_code)
+    raise RuntimeError(f"Prime import_cad 失敗：{code_name}")
+```
+
+**通用教訓**：`.venv` 釘住的是**開發者的** Python 版本，`start.ps1` 的探測清單決定的是**使用者的**版本。
+兩者不同時，本機所有驗證都會通過，卻讓使用者去踩一個從沒執行過的直譯器。
+改動探測清單時，要嘛限縮成真的跑過的版本，要嘛用清單裡最新的版本把**完整求解流程**跑過一次。
+（本次已補做：修正後用 Python 3.12 實跑完整 Fluent 流程驗證。）
+
 ### 啟動腳本地雷（真實事故，勿改回去）
 
 **1. 不要用 `Start-Job` 開瀏覽器——會被防毒軟體攔截，而且是無聲失敗。**
