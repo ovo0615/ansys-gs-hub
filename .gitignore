@@ -1,0 +1,46 @@
+# ANSYS Getting-Started Hub
+# 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 虛擬環境（由 start.ps1 於使用者機器上自行建立，絕不進版控）
+backend/.venv/
+.venv/
+env/
+venv/
+.env
+
+# 前端相依（由 npm 安裝，體積龐大，不進版控）
+frontend/node_modules/
+*.tsbuildinfo
+
+# 重要：frontend/dist 必須進版控。
+# 使用者從 GitHub「Code → Download ZIP」取得的 Source ZIP 不會包含被忽略的建置產物，
+# 若把 dist 排除，下載者就得自行安裝 Node.js 才能執行，違反本專案的發布目標。
+!frontend/dist/
+!frontend/dist/**
+
+# 求解產出與模擬專案（含本機路徑與客戶資料，不進版控）
+backend/projects/
+projects/
+
+# 求解器日誌（含內部網域、使用者名稱與本機路徑）
+*.log
+*.trn
+batch.log
+
+# ANSYS 暫存
+*.aedtresults/
+*.aedt.lock
+*.asol
+*.dsp
+*.temp
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

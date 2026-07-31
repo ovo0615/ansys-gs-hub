@@ -1,0 +1,17 @@
+# ANSYS Getting-Started Hub
+# 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
+
+# 預設：文字檔在 repo 內一律以 LF 儲存
+* text=auto
+
+# Windows 啟動腳本必須是 CRLF，否則在部分 Windows 環境下 cmd／PowerShell 解析會出問題。
+# 注意：這只影響行尾，不影響 BOM——
+#   start.bat 必須「UTF-8 無 BOM」（否則 @echo off 失效）
+#   start.ps1 必須「UTF-8 with BOM」（否則 PowerShell 5.1 會用 CP950 讀成亂碼）
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二進位檔不做任何行尾轉換
+*.png binary
+*.jpg binary
+*.ico binary

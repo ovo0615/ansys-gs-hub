@@ -1,0 +1,26 @@
+# ANSYS Getting-Started Hub —— 後端相依套件（已實測版本鎖定）
+# 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
+#
+# 這份 lock 檔記錄的是本專案實際測試通過的版本組合，start.ps1 一律使用這份檔案安裝，
+# 以確保每一台機器裝出來的環境一致。若要升級，請先在本機實測三個領域都能求解成功再更新版本號。
+#
+# 套件用途說明：
+#   fastapi                        後端 Web 框架，提供 /api 路由與 /ws WebSocket 串流日誌
+#   uvicorn[standard]              ASGI 伺服器，實際承載 FastAPI（standard 額外含 WebSocket 支援）
+#   pydantic                       請求／回應資料模型與參數驗證
+#   pyaedt                         驅動 ANSYS Electronics Desktop（HFSS）建模、求解、取 S11 與遠場方向圖
+#   pywin32                        Windows COM 初始化（PyAEDT 連線 AEDT 時需要）
+#   ansys-mechanical-core          驅動 ANSYS Mechanical 進行懸臂樑靜態結構分析
+#   ansys-fluent-core              驅動 ANSYS Fluent solver 求解混合三通流場
+#   ansys-geometry-core[graphics]  建立幾何並輸出 STL／PMDB（graphics 額外裝 pyvista 供三角化用）
+#   ansys-meshing-prime            PyPrimeMesh 網格引擎，產生 Fluent 體網格（隨 Fluent 一併安裝，不需額外授權）
+
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+pydantic==2.13.4
+pyaedt==1.2.0
+pywin32==312
+ansys-mechanical-core==0.12.11
+ansys-fluent-core==0.40.1
+ansys-geometry-core[graphics]==0.15.5
+ansys-meshing-prime==0.10.4

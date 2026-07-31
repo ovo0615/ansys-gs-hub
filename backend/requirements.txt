@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6.4
+pyaedt>=1.1.0
+pywin32>=306
+ansys-mechanical-core
+ansys-fluent-core
+ansys-geometry-core[graphics]
+ansys-meshing-prime
