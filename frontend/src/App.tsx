@@ -1,5 +1,5 @@
 // ANSYS Getting-Started Hub：領域分頁（HFSS / Mechanical / Fluent）+ 選單列（檢視：隱藏/顯示系統日誌）。
-// 選單列樣式與互動模式取自「PCB SI 3D 模擬分析工具」（D:\AI Development\PCB SI 3D Simulation Toolkit\web_app）。
+// 選單列樣式與互動模式取自「PCB SI 3D 模擬分析工具」的前端。
 // 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import { useState } from "react";

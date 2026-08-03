@@ -240,7 +240,7 @@ ansys-gs-hub/
 
 **Allotment 巢狀陷阱（重要，寫版面時務必記住）**：`allotment` 這個套件有個已知毛病——在**沒有固定尺寸**的 Allotment.Pane（例如 `minSize` 而非 `preferredSize` 的那種、要靠 flex 分配剩餘空間的 pane）裡面，如果**再巢狀一層 `<Allotment>`**，外層那個 pane 的尺寸會被算成 0（寬或高視方向而定），導致內容整個消失。這是在 Mechanical 面板要把應力雲圖擺到 3D 預覽旁邊時實測踩到的。**解法：這種「頂層大面積、需要跟另一塊內容並排」的情況一律改用普通 CSS flexbox（`<div style={{display:"flex", height:"100%", gap:7}}>`），不要用巢狀 Allotment**——`BracketPanel.tsx` 的 3D 預覽/應力雲圖、`TeePanel.tsx` 的 3D 預覽/溫度雲圖都是這樣處理。只有在**固定 `preferredSize` 的 pane 裡面**巢狀 Allotment 才是安全的（例如三個面板下方那塊 264px 高的摘要/估算/日誌區域，因為外層有固定高度，這樣巢狀沒問題）。
 
-**選單列（View menu）**：`App.tsx` 有一個「檢視」選單（樣式取自另一個專案 `D:\AI Development\PCB SI 3D Simulation Toolkit\web_app`），可切換「隱藏/顯示系統日誌」，`showLogs` 狀態在 App 層級共用，切換分頁不會重置。三個領域面板現在都接了這個 prop。
+**選單列（View menu）**：`App.tsx` 有一個「檢視」選單（樣式取自另一個專案「PCB SI 3D 模擬分析工具」的前端），可切換「隱藏/顯示系統日誌」，`showLogs` 狀態在 App 層級共用，切換分頁不會重置。三個領域面板現在都接了這個 prop。
 
 ---
 
