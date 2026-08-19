@@ -1,7 +1,5 @@
 # ANSYS Getting-Started Hub
 
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 一個整合式網頁介面：左側調整參數、中間即時顯示 3D 幾何預覽（React + Vite + three.js），
 按下「開始求解」後，後端會**真正呼叫本機已安裝且已授權的 ANSYS 軟體**完成建模、網格與求解，
 求解過程的訊息即時串流回瀏覽器，完成後直接在頁面上呈現結果曲線與雲圖。
@@ -240,10 +238,6 @@ PyAEDT 遠場資料的正確取值方式、以及 allotment 巢狀導致面板�
 ## 字型
 
 介面中文使用微軟正黑體（Microsoft JhengHei），英數使用 Calibri，設定於 `frontend/src/styles.css`。
-
----
-
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 ---
 

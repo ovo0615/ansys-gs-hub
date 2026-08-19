@@ -1,8 +1,6 @@
 ﻿# =============================================================================
 # ANSYS Getting-Started Hub 一鍵啟動腳本（Windows 發布版）
 #
-# 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-#
 # 本腳本會依序完成：
 #   1. 檢查 production 前端（frontend\dist）與套件鎖定檔是否齊全
 #   2. 尋找相容的 64 位元 Python（必要時以 WinGet 使用者層級安裝，不會動到既有版本）
@@ -50,7 +48,6 @@ function Write-Bad   ([string]$m) { Write-Host $m -ForegroundColor Red }
 
 Write-Host ""
 Write-Host "==== ANSYS Getting-Started Hub ====" -ForegroundColor Cyan
-Write-Host "此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。" -ForegroundColor DarkGray
 Write-Host ""
 
 # --- [1/5] 檢查發布內容是否完整 ------------------------------------------------

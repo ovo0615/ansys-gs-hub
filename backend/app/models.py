@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 共用資料模型：3D 預覽用的 Scene/Prim、HFSS 偶極天線的參數與求解結果。
 """
 from __future__ import annotations

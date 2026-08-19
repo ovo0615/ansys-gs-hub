@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 HFSS Getting Started（M01 Dipole workshop）的精簡版：
 半波長偶極天線 —— 兩段圓柱形導線 + 中央饋入間隙，求 S11 掃頻。
 

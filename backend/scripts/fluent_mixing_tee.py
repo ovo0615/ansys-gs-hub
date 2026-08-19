@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 Fluent Getting Started「混合三通 Mixing Tee」參數化端對端求解腳本
 ==================================================================
 對齊 Ansys Fluent Getting Started 課程 Demo：兩股空氣（冷 25°C／熱 55°C）在 T 形管

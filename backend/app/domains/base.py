@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 各領域（HFSS／Mechanical／Fluent）共用的 adapter 介面。
 """
 from __future__ import annotations

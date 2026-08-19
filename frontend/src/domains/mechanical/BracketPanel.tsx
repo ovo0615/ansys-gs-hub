@@ -1,6 +1,5 @@
 // Mechanical Getting Started（靜態結構）前端介面：懸臂樑參數 → 即時 3D 預覽 + 理論估算。
 // 本機尚未安裝／授權 ANSYS Mechanical，故「開始求解」停用；理論估算為材料力學閉式解，非 FEA。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import { useMemo, useState, useRef, useEffect } from "react";
 import { Allotment } from "allotment";

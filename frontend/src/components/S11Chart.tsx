@@ -1,6 +1,5 @@
 // 輕量 SVG 折線圖，繪製 S11(dB) vs 頻率(GHz)，標示 -10dB 線與共振頻率。
 // 刻意不引入圖表套件，維持前端相依最小化。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 interface Props {
   freqGhz: number[];

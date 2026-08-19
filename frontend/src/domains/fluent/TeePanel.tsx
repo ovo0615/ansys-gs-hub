@@ -1,7 +1,6 @@
 // Fluent Getting Started「混合三通 Mixing Tee」前端介面：對齊原廠課程 Demo 模型。
 // 兩股空氣（冷/熱）在 T 形管混合 → 即時 3D 預覽 + 理論估算（質量/能量守恆，非 CFD）+ 真求解。
 // 真求解：後端用 PyAnsys Geometry 逐面三角化 → PyPrimeMesh 產生體網格 → PyFluent solver 求解。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Allotment } from "allotment";

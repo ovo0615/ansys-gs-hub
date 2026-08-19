@@ -1,6 +1,5 @@
 // HFSS Getting Started（M01 Dipole workshop）精簡版面板：
 // 左：參數輸入（含輸出資料夾）；中：大型即時 3D 預覽（主角）；下：求解日誌 + S11 結果。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Allotment } from "allotment";

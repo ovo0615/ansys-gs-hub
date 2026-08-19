@@ -1,5 +1,4 @@
 // 共用表單欄位：數值輸入與下拉選單，供各領域參數面板使用。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 export function NumberField({
   label,

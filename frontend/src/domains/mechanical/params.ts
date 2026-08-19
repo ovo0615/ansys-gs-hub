@@ -1,6 +1,5 @@
 // Mechanical Getting Started（靜態結構）：懸臂樑／支架參數、材料庫與理論估算。
 // 理論估算＝端點受力懸臂樑的閉式解（材料力學），非有限元求解，供介面預覽與教學用。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 export type MaterialKey = "steel" | "aluminum" | "titanium";
 
