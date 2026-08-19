@@ -1,6 +1,5 @@
 // 偶極天線「參數 → 幾何」：與後端 backend/app/domains/hfss_dipole.py 的數學一致，
 // 供瀏覽器端即時預覽用，不連接後端。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import type { Bounds, Prim, Scene, Vec3 } from "../../geometry";
 import { finite } from "../../geometry";

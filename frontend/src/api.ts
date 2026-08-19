@@ -1,5 +1,4 @@
 // 與後端溝通：幾何預覽用一般 fetch，長時間求解用 WebSocket 串流日誌。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import type { Scene } from "./geometry";
 

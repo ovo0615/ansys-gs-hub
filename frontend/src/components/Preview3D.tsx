@@ -1,5 +1,5 @@
 // 即時 3D 結構預覽(Three.js)：滑鼠拖曳旋轉、滾輪縮放，參數變動即時重繪。
-// 取自 react-vite-3d-preview skill 範本，由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
+// 取自 react-vite-3d-preview skill 範本。
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";

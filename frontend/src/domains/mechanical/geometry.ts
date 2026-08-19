@@ -1,6 +1,5 @@
 // 懸臂樑「參數 → 幾何」：一段矩形樑 + 固定端牆板 + 自由端向下受力箭頭。
 // 供瀏覽器端即時 3D 預覽，不連接求解器。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import type { Bounds, Prim, Scene, Vec3 } from "../../geometry";
 import { finite } from "../../geometry";

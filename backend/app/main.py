@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 ANSYS Getting-Started Hub 後端入口：FastAPI + WebSocket。
 開發期前端（Vite）與後端不同源，這裡放寬 CORS 供本機開發使用。
 """

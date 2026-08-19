@@ -1,6 +1,5 @@
 // 混合三通「參數 → 幾何」：T 形流體域（冷側直管 + 頂部熱側支管 + 出口），
 // 三個開口以彩色薄圓盤標記、附流向箭頭。供瀏覽器端即時 3D 預覽，不連接求解器。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import type { Bounds, Prim, Scene, Vec3 } from "../../geometry";
 import { finite } from "../../geometry";

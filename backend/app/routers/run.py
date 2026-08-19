@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 長時間求解任務（HFSS 建模＋求解常需數十秒到數分鐘）用 WebSocket 串流日誌，
 背景 thread 執行 domain.run()，主協程輪詢 queue 逐行送給前端。
 """

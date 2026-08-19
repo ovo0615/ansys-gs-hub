@@ -1,6 +1,5 @@
 // 共用「模擬檔案輸出資料夾」欄位：文字輸入 + 瀏覽（原生對話框）+ 驗證／建立 + 狀態顯示。
 // 三個領域面板共用；後端 fs 路由不需安裝求解軟體即可運作。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import { useEffect, useState } from "react";
 import { getDefaultDir, pickDirectory, validateDirectory } from "../api";

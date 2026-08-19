@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 Fluent 領域 adapter：
 - geometry()：前端「混合三通」預覽由前端 geometry.ts 自行計算，這裡僅回傳示意佔位幾何。
 - run()：以 subprocess 開子行程執行 backend/scripts/fluent_mixing_tee.py（比照

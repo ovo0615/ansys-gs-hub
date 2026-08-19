@@ -1,6 +1,5 @@
 // ANSYS Getting-Started Hub：領域分頁（HFSS / Mechanical / Fluent）+ 選單列（檢視：隱藏/顯示系統日誌）。
 // 選單列樣式與互動模式取自「PCB SI 3D 模擬分析工具」的前端。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 import { useState } from "react";
 import DipolePanel from "./domains/hfss/DipolePanel";
@@ -30,8 +29,7 @@ export default function App() {
         action: () =>
           alert(
             "ANSYS Getting-Started Hub\n\n" +
-              "HFSS 偶極天線、Mechanical 懸臂樑靜態結構、Fluent 混合三通三個領域的入門模擬示範。\n\n" +
-              "此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供"
+              "HFSS 偶極天線、Mechanical 懸臂樑靜態結構、Fluent 混合三通三個領域的入門模擬示範。"
           ),
       },
     ],
@@ -43,7 +41,7 @@ export default function App() {
         <div>
           <h1 className="app-title">ANSYS Getting-Started Hub</h1>
           <p className="app-sub">
-            即時 3D 預覽 + 本機求解器驅動的基本模擬示範。此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
+            即時 3D 預覽 + 本機求解器驅動的基本模擬示範。
           </p>
         </div>
         <img

@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
-
 Mechanical 領域 adapter：
 - geometry()：前端「懸臂樑」預覽由前端 geometry.ts 自行計算，這裡僅回傳示意佔位幾何。
 - run()：委派給 backend/scripts/mechanical_cantilever.py 的 solve()，用 PyMechanical +

@@ -1,5 +1,5 @@
 // 共用的圖元(Prim)資料結構，供 Preview3D 與各領域的 geometry.ts 使用。
-// 此範本取自 react-vite-3d-preview skill，由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
+// 此範本取自 react-vite-3d-preview skill。
 
 export type Vec3 = [number, number, number];
 

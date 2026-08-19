@@ -1,5 +1,4 @@
 // 偶極天線參數定義與防呆，對應後端 DipoleParams（backend/app/models.py）。
-// 此工具由虎門科技資深技術工程師 Jeff Hong 洪敬傑提供。
 
 export interface DipoleParams {
   frequencyGhz: number;
